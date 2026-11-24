@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞（私密报告）
+    url: https://github.com/MatsiWolffie/dsh-backup/security/advisories/new
+    about: 请勿公开提交凭据、会话、附件或备份数据；安全问题请走私密报告。
+  - name: 使用说明与故障排查
+    url: https://github.com/MatsiWolffie/dsh-backup#故障排查
+    about: 先看 README 的安装、恢复与常见故障排查。
