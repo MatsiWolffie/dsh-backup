@@ -49,7 +49,7 @@
   ],
   "scripts": {
     "check": "node --check index.js && node --check client.js && node --check lib/engine.js",
-    "test": "node test/log.test.mjs && node test/diagnostics.test.mjs && node test/engine.test.mjs && node test/tool.test.mjs"
+    "test": "node test/log.test.mjs && node test/diagnostics.test.mjs && node test/location.test.mjs && node test/engine.test.mjs && node test/tool.test.mjs"
   },
   "publishConfig": {
     "access": "public"

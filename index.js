@@ -194,6 +194,7 @@ export async function buildDiagnostics(env) {
     `DSH 版本: ${await dshVersion()}`,
     `Profile: ${env.profile}`,
     `工作区: ${env.workspace}`,
+    `备份位置来源: ${env.workspaceSource ?? 'unknown'}`,
     `备份目录: ${env.backupRoot}`,
     `日志文件: ${log.path} (${log.size} bytes, rotate at ${log.maxBytes})`,
     `挂载: route=${diagnostics.route}${diagnostics.routeError === '' ? '' : ` (${diagnostics.routeError})`} tool=${diagnostics.tool}${diagnostics.toolError === '' ? '' : ` (${diagnostics.toolError})`}`,

@@ -116,6 +116,8 @@ dsh-backups/
   挂载状态、上次恢复与最近日志）和**打开日志文件夹**。分享日志前请自行检查是否含用户名或路径。
 - 升级插件后请打开一次插件页（或做一次备份），让备份目录里的 `restore.ps1` 也刷新到新版本；
   旧的还原点文件不会自动更新。
+- 备份位置在第一次使用时固定（记录在 `%USERPROFILE%\.dsh\.dsh-backup\location.json`），
+  新增工作区不会把备份目录切走；已有备份的工作区会被优先沿用。
 
 ## 隐私与安全
 
@@ -150,6 +152,7 @@ dsh-backups/
 | 提示“备份服务未响应” | 同上；仍不行请重启 DSH |
 | 离线程序提示 DSH 仍在运行 | 先退出 DSH；确认已退出仍误判时加 `-Force` |
 | 离线恢复后插件页空白、插件全没了 | V1.0.0 的已知问题（整目录替换）；升级 V1.0.1 后重新安装插件 |
+| 新增工作区后看不到旧备份 | 1.0.2 起备份位置固定；升级后自动沿用已有备份的工作区，旧备份仍在原工作区的 `dsh-backups` |
 | 恢复时部分文件被占用 | 关闭 DSH 后用离线恢复程序完成 |
 | 插件页没有卡片 | 确认插件已安装并启用，然后刷新页面 |
 | 出错但不知道原因 | 卡片「诊断」→「复制诊断信息」，附上 `dsh-backups/logs/plugin.log` 最后几十行 |
@@ -166,6 +169,7 @@ dsh-backups/
 node --check index.js && node --check client.js && node --check lib/engine.js
 node test/log.test.mjs          # 日志格式/滚动/清洗
 node test/diagnostics.test.mjs  # 诊断信息：BOM 回执、单元素数组、路径脱敏
+node test/location.test.mjs     # 备份位置固定：新增工作区不切换、已有备份优先
 node test/engine.test.mjs       # 引擎：备份/恢复/删除/实时会话保护/凭据开关
 node test/tool.test.mjs         # Agent 工具 dsh_backup
 ```
