@@ -4,6 +4,10 @@
  * backup or restore means exactly one thing.
  */
 
+import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import path from 'node:path'
+
 import {
   createPoint,
   deletePoint,
@@ -13,6 +17,7 @@ import {
   resolveEnvironment,
   restorePoint,
 } from './lib/engine.js'
+import { appendLog, logPath, tailLog } from './lib/log.js'
 
 export const name = 'dsh-backup'
 
@@ -117,6 +122,83 @@ function liveSessionIds(ctx) {
   }
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Replace the user's home directory so a pasted report does not leak it. */
+function redactPaths(text, env) {
+  const home = String(env.home).replace(/[\\/]+$/, '')
+  const userHome = homedir()
+  return text
+    .replace(new RegExp(escapeRegExp(home), 'gi'), '%USERPROFILE%\\.dsh')
+    .replace(new RegExp(escapeRegExp(userHome), 'gi'), '%USERPROFILE%')
+}
+
+async function packageVersion() {
+  try {
+    const pkg = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'))
+    return String(pkg.version ?? 'unknown')
+  } catch {
+    return 'unknown'
+  }
+}
+
+async function dshVersion() {
+  try {
+    const dir = process.env.DSH_INSTALL_DIR
+    if (!dir) return 'unknown'
+    const pkg = JSON.parse(await readFile(path.join(dir, 'package.json'), 'utf8'))
+    return String(pkg.version ?? 'unknown')
+  } catch {
+    return 'unknown'
+  }
+}
+
+/** Summary of the last restore receipt, or null when this machine never restored. */
+async function lastRestoreSummary(env) {
+  try {
+    const receipt = JSON.parse(await readFile(path.join(env.home, '.dsh-backup', 'last-restore.json'), 'utf8'))
+    return {
+      point: receipt.point?.id ?? 'unknown',
+      ok: receipt.ok === true,
+      safety: receipt.safetyPoint ?? '',
+      failed: (receipt.results ?? []).filter((result) => result.ok !== true).length,
+      skipped: (receipt.skippedLiveSessions ?? []).length,
+      at: receipt.restoredAt ?? '',
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Build the pasteable diagnostics block; paths are redacted and no contents are included. */
+async function buildDiagnostics(env) {
+  const status = await listStatus(env)
+  const last = await lastRestoreSummary(env)
+  const lines = await tailLog(env, 12)
+  const report = [
+    'DSH 备份与恢复 · 诊断信息',
+    `生成时间: ${new Date().toISOString()}`,
+    `插件版本: ${await packageVersion()}`,
+    `DSH 版本: ${await dshVersion()}`,
+    `Profile: ${env.profile}`,
+    `工作区: ${env.workspace}`,
+    `备份目录: ${env.backupRoot}`,
+    `日志文件: ${status.log.path} (${status.log.size} bytes, rotate at ${status.log.maxBytes})`,
+    `挂载: route=${diagnostics.route}${diagnostics.routeError === '' ? '' : ` (${diagnostics.routeError})`} tool=${diagnostics.tool}${diagnostics.toolError === '' ? '' : ` (${diagnostics.toolError})`}`,
+    `恢复程序: ready=${status.restoreProgram.ready}`,
+    `还原点: ${status.pointCount} 个；最近 ${status.lastBackupAt ?? '无'}`,
+    last === null
+      ? '上次恢复: 无记录'
+      : `上次恢复: point=${last.point} ok=${last.ok} safety=${last.safety} failed=${last.failed} skipped=${last.skipped} at=${last.at}`,
+    '要求: DSH >= 0.2.2-rc.5（engines.dsh）',
+    '最近日志:',
+    ...(lines.length === 0 ? ['  (空)'] : lines.map((line) => `  ${line}`)),
+  ].join('\n')
+  return redactPaths(report, env)
+}
+
 /** Run one named operation; every failure becomes `{ ok: false, error }`. */
 async function runOperation(ctx, env, operation, point, options = {}) {
   switch (operation) {
@@ -145,7 +227,7 @@ async function runOperation(ctx, env, operation, point, options = {}) {
       return { ok: true, deleted, status }
     }
     case 'open': {
-      const opened = await openFolder(env)
+      const opened = await openFolder(env, options.target === 'logs' ? 'logs' : 'backup')
       return { ok: true, open: opened }
     }
     default:
@@ -224,57 +306,65 @@ export function createTool(ctx) {
     },
     execute: async (args) => {
       const action = typeof args?.action === 'string' ? args.action : ''
-      if (!['status', 'backup', 'restore', 'delete'].includes(action)) {
-        throw new Error(`unknown action: ${action === '' ? '(missing)' : action}`)
-      }
-      const env = resolveEnvironment(ctx)
-      if (action === 'status') {
-        const status = await listStatus(env)
-        return {
-          ok: true,
-          message: status.pointCount === 0
-            ? `No restore points yet. Backups live in ${status.backupRoot}.`
-            : `${status.pointCount} restore point(s) in ${status.backupRoot}.`,
-          backupRoot: status.backupRoot,
-          points: pointsOf(status),
+      try {
+        if (!['status', 'backup', 'restore', 'delete'].includes(action)) {
+          throw new Error(`unknown action: ${action === '' ? '(missing)' : action}`)
         }
-      }
-      if (action === 'backup') {
-        const manifest = await createPoint(env, { includeCredentials: args?.includeCredentials === true })
-        const status = await listStatus(env)
-        return {
-          ok: true,
-          message: `Created restore point ${manifest.id} (${manifest.fileCount} files, ${manifest.totalBytes} bytes).`,
-          backupRoot: status.backupRoot,
-          point: manifest.id,
-          points: pointsOf(status),
+        const env = resolveEnvironment(ctx)
+        if (action === 'status') {
+          const status = await listStatus(env)
+          return {
+            ok: true,
+            message: status.pointCount === 0
+              ? `No restore points yet. Backups live in ${status.backupRoot}.`
+              : `${status.pointCount} restore point(s) in ${status.backupRoot}.`,
+            backupRoot: status.backupRoot,
+            points: pointsOf(status),
+          }
         }
-      }
-      const point = typeof args?.point === 'string' ? args.point.trim() : ''
-      if (point === '') throw new Error('`point` is required for this action')
-      if (action === 'delete') {
-        await deletePoint(env, point)
-        const status = await listStatus(env)
-        return { ok: true, message: `Deleted restore point ${point}.`, backupRoot: status.backupRoot, point }
-      }
-      if (action === 'restore') {
-        const restored = await restorePoint(env, point, { liveSessionIds: liveSessionIds(ctx) })
-        const failedParts = restored.results.filter((result) => !result.ok).map((result) => result.id)
-        const kept = restored.skippedLiveSessions.length
-        return {
-          ok: restored.ok,
-          message: restored.ok
-            ? `Restored ${point}. Restart DSH for the restored configuration and sessions to take effect. A safety backup was written as ${restored.safetyPoint}.`
-              + (kept === 0 ? '' : ` ${kept} session(s) that DSH still has open were kept as they are; restore again after the restart to include them.`)
-            : `Restored ${point} with failures in: ${failedParts.join(', ')}. Close DSH and use the offline restore program in ${restored.backupRoot} to finish.`,
-          backupRoot: restored.backupRoot,
-          point,
-          safetyPoint: restored.safetyPoint,
-          requiresRestart: true,
-          failedParts,
+        if (action === 'backup') {
+          const manifest = await createPoint(env, { includeCredentials: args?.includeCredentials === true })
+          const status = await listStatus(env)
+          return {
+            ok: true,
+            message: `Created restore point ${manifest.id} (${manifest.fileCount} files, ${manifest.totalBytes} bytes).`,
+            backupRoot: status.backupRoot,
+            point: manifest.id,
+            points: pointsOf(status),
+          }
         }
+        const point = typeof args?.point === 'string' ? args.point.trim() : ''
+        if (point === '') throw new Error('`point` is required for this action')
+        if (action === 'delete') {
+          await deletePoint(env, point)
+          const status = await listStatus(env)
+          return { ok: true, message: `Deleted restore point ${point}.`, backupRoot: status.backupRoot, point }
+        }
+        if (action === 'restore') {
+          const restored = await restorePoint(env, point, { liveSessionIds: liveSessionIds(ctx) })
+          const failedParts = restored.results.filter((result) => !result.ok).map((result) => result.id)
+          const kept = restored.skippedLiveSessions.length
+          return {
+            ok: restored.ok,
+            message: restored.ok
+              ? `Restored ${point}. Restart DSH for the restored configuration and sessions to take effect. A safety backup was written as ${restored.safetyPoint}.`
+                + (kept === 0 ? '' : ` ${kept} session(s) that DSH still has open were kept as they are; restore again after the restart to include them.`)
+              : `Restored ${point} with failures in: ${failedParts.join(', ')}. Close DSH and use the offline restore program in ${restored.backupRoot} to finish.`,
+            backupRoot: restored.backupRoot,
+            point,
+            safetyPoint: restored.safetyPoint,
+            requiresRestart: true,
+            failedParts,
+          }
+        }
+        throw new Error(`unknown action: ${action}`)
+      } catch (error) {
+        await appendLog(resolveEnvironment(ctx), 'error', 'tool.failed', {
+          action: action === '' ? '(missing)' : action,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        throw error
       }
-      throw new Error(`unknown action: ${action}`)
     },
     presentCall: (args) => ({
       card: 'generic',
@@ -301,7 +391,12 @@ export function apply(ctx) {
           path: ROUTE,
           handler: async (req, res) => {
             try {
+              const env = resolveEnvironment(ctx)
               if (!admitted(req)) {
+                await appendLog(env, 'warn', 'http.forbidden', {
+                  host: authorityOf(req.headers.host) || '(none)',
+                  site: req.headers['sec-fetch-site'] ?? '',
+                })
                 send(res, 403, {
                   ok: false,
                   error: 'forbidden',
@@ -311,13 +406,16 @@ export function apply(ctx) {
               }
               const url = new URL(req.url ?? ROUTE, 'http://localhost')
               const operation = url.pathname.startsWith(`${ROUTE}/`) ? url.pathname.slice(ROUTE.length + 1) : ''
-              const env = resolveEnvironment(ctx)
               if (req.method === 'GET' || req.method === 'HEAD') {
-                if (operation !== 'status') {
-                  send(res, 405, { ok: false, error: 'method not allowed' })
+                if (operation === 'status') {
+                  send(res, 200, { ...await listStatus(env), diagnostics })
                   return
                 }
-                send(res, 200, { ...await listStatus(env), diagnostics })
+                if (operation === 'diagnostics') {
+                  send(res, 200, { ok: true, report: await buildDiagnostics(env), logPath: logPath(env) })
+                  return
+                }
+                send(res, 405, { ok: false, error: 'method not allowed' })
                 return
               }
               if (req.method !== 'POST') {
@@ -330,6 +428,7 @@ export function apply(ctx) {
               try {
                 result = await runOperation(ctx, env, operation, point, {
                   includeCredentials: body.includeCredentials === true,
+                  target: typeof body.target === 'string' ? body.target : '',
                 })
               } catch (error) {
                 send(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
@@ -337,6 +436,13 @@ export function apply(ctx) {
               }
               send(res, 200, result)
             } catch (error) {
+              try {
+                await appendLog(resolveEnvironment(ctx), 'error', 'http.failed', {
+                  error: error instanceof Error ? error.message : String(error),
+                })
+              } catch {
+                /* ignore */
+              }
               send(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
             }
           },

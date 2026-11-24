@@ -53,6 +53,14 @@ window.__ModuleLoader__.load({
       repairing: 'Repairing…',
       includeCredentials: 'Include sign-in records',
       credentialsTag: 'includes credentials',
+      diagnosticsTitle: 'Diagnostics',
+      diagnosticsHint: 'Operation log for troubleshooting. The copied report shortens the home folder to %USERPROFILE%; the log file itself keeps full paths.',
+      copyDiagnostics: 'Copy diagnostics',
+      copying: 'Copying…',
+      openLogs: 'Open log folder',
+      diagnosticsCopied: 'Diagnostics copied. Check it before sharing.',
+      clipboardUnavailable: 'Could not copy automatically; use “Open log folder” instead.',
+      logFile: 'Log file',
       credentialNote: 'Sign-in records are not backed up by default. When enabled, a restore point holds .credentials.yaml in plain text, so never share or commit the backup folder. Sessions and attachments are private too.',
       filesLabel: '{n} file(s) · {size}',
       loading: 'Reading backup status…',
@@ -104,6 +112,14 @@ window.__ModuleLoader__.load({
       repairing: '正在生成…',
       includeCredentials: '同时备份登录凭据',
       credentialsTag: '含凭据',
+      diagnosticsTitle: '诊断',
+      diagnosticsHint: '排查问题用的操作日志。复制出的诊断信息会把主目录显示为 %USERPROFILE%；日志文件本身保留完整路径。',
+      copyDiagnostics: '复制诊断信息',
+      copying: '正在复制…',
+      openLogs: '打开日志文件夹',
+      diagnosticsCopied: '诊断信息已复制，分享前请检查内容。',
+      clipboardUnavailable: '无法自动复制，请改用“打开日志文件夹”。',
+      logFile: '日志文件',
       credentialNote: '默认不备份登录凭据；勾选后还原点会包含明文的 .credentials.yaml，请勿分享或提交备份文件夹。会话与附件同样是私有数据。',
       filesLabel: '{n} 个文件 · {size}',
       loading: '正在读取备份状态…',
@@ -189,6 +205,9 @@ window.__ModuleLoader__.load({
 .dsb-offline strong { color: var(--dsw-alias-label-primary); font-size: 12px; }
 .dsb-offline code { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace);
   color: var(--dsw-alias-label-primary); font-size: 12px; }
+.dsb-diag { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--dsw-alias-border-l2);
+  padding-top: 12px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.dsb-diag strong { color: var(--dsw-alias-label-primary); font-size: 12px; }
 .dsb-foot { color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
 `
 
@@ -322,6 +341,26 @@ window.__ModuleLoader__.load({
           () => { setCopied(true) },
           () => { setNotice({ kind: 'plain', text }) },
         )
+      }
+
+      const copyDiagnostics = async () => {
+        setBusy('diag')
+        setNotice(null)
+        try {
+          const payload = await call('diagnostics')
+          if (typeof payload.report !== 'string' || payload.report === '') throw new Error('empty diagnostics')
+          if (typeof navigator === 'undefined' || navigator.clipboard === undefined) {
+            setNotice({ kind: 'plain', text: t('clipboardUnavailable') })
+            return
+          }
+          await navigator.clipboard.writeText(payload.report)
+          setNotice({ kind: 'ok', text: t('diagnosticsCopied') })
+        } catch (error) {
+          const friendly = callFailure(t, error)
+          setNotice({ kind: 'error', text: friendly !== '' ? friendly : t('actionFailed', { error: message(error) }) })
+        } finally {
+          setBusy('')
+        }
       }
 
       const header = h('div', { className: 'dsb-head' },
@@ -495,6 +534,34 @@ window.__ModuleLoader__.load({
         )
       }
 
+      let diagnosticsBlock = null
+      if (ready !== undefined && ready.log?.path) {
+        diagnosticsBlock = h('div', { className: 'dsb-diag' },
+          h('strong', null, t('diagnosticsTitle')),
+          h('span', null, t('diagnosticsHint')),
+          h('div', { className: 'dsb-path-row' },
+            h('code', { className: 'dsb-path' }, ready.log?.path ?? ''),
+            h('button', {
+              type: 'button',
+              className: 'dsb-linkbtn',
+              disabled: busyAny,
+              onClick: copyDiagnostics,
+            }, busy === 'diag' ? t('copying') : t('copyDiagnostics')),
+            h('button', {
+              type: 'button',
+              className: 'dsb-linkbtn',
+              disabled: busyAny,
+              onClick: () => {
+                run('open', { target: 'logs' }, (payload) => payload.open?.ok === false
+                  ? { kind: 'error', text: t('actionFailed', { error: payload.open.error ?? '' }) }
+                  : null)
+              },
+            }, t('openLogs')),
+          ),
+          h('span', null, `${t('logFile')}: ${bytes(ready.log?.size ?? 0)}`),
+        )
+      }
+
       return h('div', { className: 'dsb-card', 'data-dsh-backup': '' },
         h('style', { dangerouslySetInnerHTML: { __html: CSS } }),
         header,
@@ -510,6 +577,7 @@ window.__ModuleLoader__.load({
           list,
         ),
         offline,
+        diagnosticsBlock,
       )
     }
 

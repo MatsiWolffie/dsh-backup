@@ -14,7 +14,7 @@
     -Force                           即使检测到 DSH 进程也继续（确认已退出时使用）
     -Yes                             不再询问确认，也不在结束时暂停（供脚本调用）
 
-  恢复前会把当前数据移动到 <DSH_HOME>\.dsh-backup\replaced-<时间>\ 作为回滚依据。
+  恢复前会把将被覆盖的文件复制到 <DSH_HOME>\.dsh-backup\replaced-<时间>\ 作为回滚副本。
 #>
 [CmdletBinding()]
 param(
@@ -31,6 +31,27 @@ if ($env:DSH_HOME -and $env:DSH_HOME.Trim() -ne '') {
   $DshHome = $env:DSH_HOME.Trim()
 } else {
   $DshHome = Join-Path $env:USERPROFILE '.dsh'
+}
+
+$ScriptVersion = '1.0.2'
+$LogDir = Join-Path $ScriptDir 'logs'
+$LogFile = Join-Path $LogDir 'restore-offline.log'
+
+# One line per step; never write credentials or file contents here.
+function Write-RestoreLog([string]$level, [string]$message) {
+  try {
+    if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }
+    if (Test-Path -LiteralPath $LogFile) {
+      if ((Get-Item -LiteralPath $LogFile).Length -gt 262144) {
+        Remove-Item -LiteralPath ($LogFile + '.1') -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $LogFile -Destination ($LogFile + '.1') -Force
+      }
+    }
+    $line = '{0} {1} {2}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz'), $level.ToUpperInvariant(), (($message -replace '\s+', ' ').Trim())
+    [System.IO.File]::AppendAllText($LogFile, ($line + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
+  } catch {
+    # 日志写不进去也不能中断恢复
+  }
 }
 
 function Write-Head([string]$text) {
@@ -198,9 +219,11 @@ function Invoke-Restore([string]$folder) {
       }
       $results += [pscustomobject]@{ id = $part.id; label = $part.label; ok = $true; message = '' }
       Write-Ok ("  已恢复 {0}" -f $part.label)
+      Write-RestoreLog 'INFO' ("part ok id={0}" -f $part.id)
     } catch {
       $results += [pscustomobject]@{ id = $part.id; label = $part.label; ok = $false; message = $_.Exception.Message }
       Write-Bad ("  恢复失败 {0}：{1}" -f $part.label, $_.Exception.Message)
+      Write-RestoreLog 'ERROR' ("part failed id={0} error={1}" -f $part.id, $_.Exception.Message)
     }
   }
 
@@ -218,6 +241,7 @@ function Invoke-Restore([string]$folder) {
   }
   $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $receiptDir 'last-restore.json') -Encoding UTF8
 
+  Write-RestoreLog ($(if ($ok) { 'INFO' } else { 'WARN' })) ("restore done ok={0} parts={1} replacedDir={2}" -f $ok, $results.Count, $quarantine)
   Write-Head '恢复结果'
   if ($ok) {
     Write-Ok '全部部分已恢复。请重新打开 DSH 桌面端。'
@@ -232,19 +256,23 @@ function Invoke-Restore([string]$folder) {
 Write-Host 'DSH 桌面端 · 离线恢复程序' -ForegroundColor Cyan
 Write-Host ("DSH 数据目录: {0}" -f $DshHome)
 Write-Host ("备份目录:     {0}" -f $ScriptDir)
+Write-RestoreLog 'INFO' ("offline-restore start version={0} dshHome={1}" -f $ScriptVersion, $DshHome)
 
 $running = Get-DshProcesses
 if ($running.Count -gt 0 -and -not $Force) {
   Write-Host ''
   Write-Bad '检测到 DSH 仍在运行，无法安全覆盖数据：'
   foreach ($process in $running) { Write-Host ("  - {0} (PID {1})" -f $process.ProcessName, $process.Id) }
+  Write-RestoreLog 'WARN' ("dsh still running pids={0}" -f (($running | ForEach-Object { $_.Id }) -join ','))
   Write-Note '请先完全退出 DSH：任务栏图标右键 → 退出，或使用任务管理器结束 DeepSeek Harness。'
   Write-Note '退出后重新双击“恢复DSH.cmd”。'
   if (-not $Yes) { Read-Host '按回车键关闭窗口' | Out-Null }
   exit 2
 }
 
+Write-RestoreLog 'INFO' 'dsh process check passed'
 $points = Get-RestorePoints
+Write-RestoreLog 'INFO' ("points found={0}" -f $points.Count)
 $manifests = @()
 # `$point` would alias the case-insensitive `$Point` parameter and silently
 # replace an empty selection with the last point in the list.
@@ -283,13 +311,16 @@ if ($Point -ne '') {
   }
 }
 
+Write-RestoreLog 'INFO' ("restore selected point={0}" -f (Split-Path -Leaf $folder))
 $code = 1
 try {
   if (Invoke-Restore $folder) { $code = 0 } else { $code = 5 }
 } catch {
   Write-Bad ("恢复出错：{0}" -f $_.Exception.Message)
+  Write-RestoreLog 'ERROR' ("restore error={0}" -f $_.Exception.Message)
   $code = 1
 }
+Write-RestoreLog 'INFO' ("offline-restore exit code={0}" -f $code)
 
 if (-not $Yes) { Read-Host '按回车键关闭窗口' | Out-Null }
 exit $code

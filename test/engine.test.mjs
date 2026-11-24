@@ -49,6 +49,7 @@ const status0 = await listStatus(env)
 check('no points initially', status0.pointCount === 0)
 check('restore program seeded', status0.restoreProgram.ready === true)
 check('restore program file exists', existsSync(path.join(env.backupRoot, '恢复DSH.cmd')))
+check('status reports the operation log', status0.log.path.endsWith(path.join('logs', 'plugin.log')), status0.log.path)
 
 const first = await createPoint(env)
 check('profile copied without node_modules', !existsSync(path.join(env.pointsDir, first.id, 'profile/node_modules')))
@@ -58,6 +59,10 @@ check('credentials not copied by default', !existsSync(path.join(env.pointsDir, 
 check('backup folder carries a .gitignore guard', existsSync(path.join(env.backupRoot, '.gitignore')))
 check('manifest written', existsSync(path.join(env.pointsDir, first.id, 'manifest.json')))
 check('manifest excludes node_modules size', first.fileCount >= 4)
+const logText = await readFile(path.join(env.backupRoot, 'logs', 'plugin.log'), 'utf8')
+check('backup operation logged', logText.includes('backup.done'))
+check('status log size grows after a backup', (await listStatus(env)).log.size > 0)
+check('log does not contain credential contents', !logText.includes('version: 1'))
 
 // Sign-in records are opt-in, and the manifest records the choice.
 const withCredentials = await createPoint(env, { includeCredentials: true })
@@ -76,6 +81,8 @@ check('restore created safety point', typeof restored.safetyPoint === 'string' &
 check('config restored', (await readFile(path.join(home, 'profiles/desktop/cordis.patch.yml'), 'utf8')) === 'version: 1\n')
 check('sessions restored', (await readFile(path.join(home, 'sessions/s1/session.v4.jsonl.zstd'), 'utf8')) === 'session-one')
 check('restore receipt written', existsSync(path.join(home, '.dsh-backup/last-restore.json')))
+const logAfterRestore = await readFile(path.join(env.backupRoot, 'logs', 'plugin.log'), 'utf8')
+check('restore operation logged', logAfterRestore.includes('restore.done'))
 check('safety point restorable', existsSync(path.join(env.pointsDir, restored.safetyPoint, 'manifest.json')))
 
 const status1 = await listStatus(env)
