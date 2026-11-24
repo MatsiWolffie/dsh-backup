@@ -30,6 +30,8 @@ node test/tool.test.mjs
   `dsh-backups/.gitignore` stays, and the HTTP routes stay same-origin only.
 - Tests must not touch a real `DSH_HOME`; use a temporary directory (see `test/`).
 - Update `CHANGELOG.md` for user-visible changes.
+- Release notes live in `docs/RELEASE_NOTES_V<version>.md` (copy `docs/RELEASE_NOTES_TEMPLATE.md`);
+  the first lines must state the applicable and minimum DSH versions.
 
 ## Pull requests
 
