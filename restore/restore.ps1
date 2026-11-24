@@ -239,7 +239,13 @@ function Invoke-Restore([string]$folder) {
     results         = $results
     requiresRestart = $false
   }
-  $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $receiptDir 'last-restore.json') -Encoding UTF8
+  try {
+    $receiptJson = $receipt | ConvertTo-Json -Depth 6
+    [System.IO.File]::WriteAllText((Join-Path $receiptDir 'last-restore.json'), ($receiptJson + [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($false)))
+  } catch {
+    Write-Note ("恢复回执写入失败：{0}" -f $_.Exception.Message)
+    Write-RestoreLog 'WARN' ("receipt write failed: {0}" -f $_.Exception.Message)
+  }
 
   Write-RestoreLog ($(if ($ok) { 'INFO' } else { 'WARN' })) ("restore done ok={0} parts={1} replacedDir={2}" -f $ok, $results.Count, $quarantine)
   Write-Head '恢复结果'
@@ -266,6 +272,7 @@ if ($running.Count -gt 0 -and -not $Force) {
   Write-RestoreLog 'WARN' ("dsh still running pids={0}" -f (($running | ForEach-Object { $_.Id }) -join ','))
   Write-Note '请先完全退出 DSH：任务栏图标右键 → 退出，或使用任务管理器结束 DeepSeek Harness。'
   Write-Note '退出后重新双击“恢复DSH.cmd”。'
+  Write-RestoreLog 'WARN' 'offline-restore exit code=2 (dsh running)'
   if (-not $Yes) { Read-Host '按回车键关闭窗口' | Out-Null }
   exit 2
 }
@@ -281,23 +288,32 @@ foreach ($candidate in $points) {
 }
 
 if ($Point -ne '') {
-  $folder = Resolve-PointFolder $Point
+  try {
+    $folder = Resolve-PointFolder $Point
+  } catch {
+    Write-Bad $_.Exception.Message
+    Write-RestoreLog 'ERROR' ("resolve point failed: {0}" -f $_.Exception.Message)
+    if (-not $Yes) { Read-Host '按回车键关闭窗口' | Out-Null }
+    exit 4
+  }
 } else {
   if ($points.Count -eq 0) {
     Write-Host ''
     Write-Bad ("没有找到任何还原点：{0}" -f $PointsDir)
     Write-Note '请先正常打开 DSH，在“插件 → 备份与还原点”里创建备份。'
+    Write-RestoreLog 'WARN' 'offline-restore exit code=3 (no restore points)'
     if (-not $Yes) { Read-Host '按回车键关闭窗口' | Out-Null }
     exit 3
   }
   Show-Points $points $manifests
   Write-Host ''
   $choice = Read-Host '输入还原点序号（1、2…），或直接粘贴还原点文件夹 / .zip 路径；输入 q 退出'
-  if ($choice -match '^(q|Q)$') { exit 0 }
+  if ($choice -match '^(q|Q)$') { Write-RestoreLog 'INFO' 'offline-restore cancelled at menu'; exit 0 }
   if ($choice -match '^\d+$') {
     $index = [int]$choice
     if ($index -lt 1 -or $index -gt $points.Count) {
       Write-Bad ("序号超出范围：{0}" -f $choice)
+      Write-RestoreLog 'WARN' ("offline-restore exit code=4 (bad index={0})" -f $choice)
       if (-not $Yes) { Read-Host '按回车键关闭窗口' | Out-Null }
       exit 4
     }

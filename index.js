@@ -158,13 +158,22 @@ async function dshVersion() {
 /** Summary of the last restore receipt, or null when this machine never restored. */
 async function lastRestoreSummary(env) {
   try {
-    const receipt = JSON.parse(await readFile(path.join(env.home, '.dsh-backup', 'last-restore.json'), 'utf8'))
+    // Windows PowerShell writes the offline receipt with a UTF-8 BOM, and
+    // ConvertTo-Json turns a one-element array into an object. Accept both.
+    const text = (await readFile(path.join(env.home, '.dsh-backup', 'last-restore.json'), 'utf8')).replace(/^\uFEFF/, '')
+    const receipt = JSON.parse(text)
+    const results = Array.isArray(receipt.results)
+      ? receipt.results
+      : receipt.results === undefined || receipt.results === null ? [] : [receipt.results]
+    const skipped = Array.isArray(receipt.skippedLiveSessions)
+      ? receipt.skippedLiveSessions
+      : receipt.skippedLiveSessions === undefined || receipt.skippedLiveSessions === null ? [] : [receipt.skippedLiveSessions]
     return {
       point: receipt.point?.id ?? 'unknown',
       ok: receipt.ok === true,
       safety: receipt.safetyPoint ?? '',
-      failed: (receipt.results ?? []).filter((result) => result.ok !== true).length,
-      skipped: (receipt.skippedLiveSessions ?? []).length,
+      failed: results.filter((result) => result.ok !== true).length,
+      skipped: skipped.length,
       at: receipt.restoredAt ?? '',
     }
   } catch {
@@ -173,8 +182,9 @@ async function lastRestoreSummary(env) {
 }
 
 /** Build the pasteable diagnostics block; paths are redacted and no contents are included. */
-async function buildDiagnostics(env) {
+export async function buildDiagnostics(env) {
   const status = await listStatus(env)
+  const log = status.log ?? { path: '', size: 0, maxBytes: 0 }
   const last = await lastRestoreSummary(env)
   const lines = await tailLog(env, 12)
   const report = [
@@ -185,7 +195,7 @@ async function buildDiagnostics(env) {
     `Profile: ${env.profile}`,
     `工作区: ${env.workspace}`,
     `备份目录: ${env.backupRoot}`,
-    `日志文件: ${status.log.path} (${status.log.size} bytes, rotate at ${status.log.maxBytes})`,
+    `日志文件: ${log.path} (${log.size} bytes, rotate at ${log.maxBytes})`,
     `挂载: route=${diagnostics.route}${diagnostics.routeError === '' ? '' : ` (${diagnostics.routeError})`} tool=${diagnostics.tool}${diagnostics.toolError === '' ? '' : ` (${diagnostics.toolError})`}`,
     `恢复程序: ready=${status.restoreProgram.ready}`,
     `还原点: ${status.pointCount} 个；最近 ${status.lastBackupAt ?? '无'}`,
@@ -359,10 +369,14 @@ export function createTool(ctx) {
         }
         throw new Error(`unknown action: ${action}`)
       } catch (error) {
-        await appendLog(resolveEnvironment(ctx), 'error', 'tool.failed', {
-          action: action === '' ? '(missing)' : action,
-          error: error instanceof Error ? error.message : String(error),
-        })
+        try {
+          await appendLog(resolveEnvironment(ctx), 'error', 'tool.failed', {
+            action: action === '' ? '(missing)' : action,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        } catch {
+          /* logging must not hide the original failure */
+        }
         throw error
       }
     },

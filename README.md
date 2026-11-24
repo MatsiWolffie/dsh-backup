@@ -114,6 +114,8 @@ dsh-backups/
 - 离线恢复程序写 `dsh-backups/logs/restore-offline.log`（版本、选择、每部分结果、错误）。
 - 卡片底部「诊断」：**复制诊断信息**（主目录显示为 `%USERPROFILE%`，含插件/DSH 版本、路径、
   挂载状态、上次恢复与最近日志）和**打开日志文件夹**。分享日志前请自行检查是否含用户名或路径。
+- 升级插件后请打开一次插件页（或做一次备份），让备份目录里的 `restore.ps1` 也刷新到新版本；
+  旧的还原点文件不会自动更新。
 
 ## 隐私与安全
 
@@ -162,8 +164,10 @@ dsh-backups/
 
 ```bash
 node --check index.js && node --check client.js && node --check lib/engine.js
-node test/engine.test.mjs   # 引擎：备份/恢复/删除/实时会话保护/凭据开关
-node test/tool.test.mjs     # Agent 工具 dsh_backup
+node test/log.test.mjs          # 日志格式/滚动/清洗
+node test/diagnostics.test.mjs  # 诊断信息：BOM 回执、单元素数组、路径脱敏
+node test/engine.test.mjs       # 引擎：备份/恢复/删除/实时会话保护/凭据开关
+node test/tool.test.mjs         # Agent 工具 dsh_backup
 ```
 
 改包名时需要同步三处：`package.json` 的 `name`、`client.js` 的模块 `id` 与

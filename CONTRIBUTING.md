@@ -32,6 +32,8 @@ node test/tool.test.mjs
 - Update `CHANGELOG.md` for user-visible changes.
 - Release notes live in `docs/RELEASE_NOTES_V<version>.md` (copy `docs/RELEASE_NOTES_TEMPLATE.md`);
   the first lines must state the applicable and minimum DSH versions.
+- When releasing, bump `package.json` `version`, `CHANGELOG.md`, the release-notes file, and
+  `$ScriptVersion` at the top of `restore/restore.ps1`.
 
 ## Pull requests
 

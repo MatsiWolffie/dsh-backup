@@ -17,5 +17,6 @@ jobs:
       - run: node --check client.js
       - run: node --check lib/engine.js
       - run: node test/log.test.mjs
+      - run: node test/diagnostics.test.mjs
       - run: node test/engine.test.mjs
       - run: node test/tool.test.mjs
