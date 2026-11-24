@@ -33,7 +33,7 @@ if ($env:DSH_HOME -and $env:DSH_HOME.Trim() -ne '') {
   $DshHome = Join-Path $env:USERPROFILE '.dsh'
 }
 
-$ScriptVersion = '1.0.2'
+$ScriptVersion = '1.0.3'
 $LogDir = Join-Path $ScriptDir 'logs'
 $LogFile = Join-Path $LogDir 'restore-offline.log'
 
