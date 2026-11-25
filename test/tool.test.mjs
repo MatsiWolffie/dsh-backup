@@ -21,6 +21,9 @@ await mkdir(workspace, { recursive: true })
 const ctx = {
   get: (name) => {
     if (name === 'workingDirectory') return { defaultDirectory: workspace }
+    if (name === 'workspaceRegistry') {
+      return { list: () => [{ path: workspace, updatedAt: '2026-01-01T00:00:00.000Z' }] }
+    }
     if (name === 'agents') return { list: () => [{ id: 's1' }] }
     return undefined
   },

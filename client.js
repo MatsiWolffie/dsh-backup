@@ -60,6 +60,13 @@ window.__ModuleLoader__.load({
       openLogs: 'Open log folder',
       diagnosticsCopied: 'Diagnostics copied. Check it before sharing.',
       clipboardUnavailable: 'Could not copy automatically; use “Open log folder” instead.',
+      backupBlockedTitle: 'Backup folder needs attention',
+      backupMultipleHint: 'More than one dsh-backups folder was found. To avoid splitting backups, the plugin stopped automatic selection. Keep exactly one folder, move the others out of DSH workspaces, then scan again. Do not merge or delete data.',
+      backupIncompleteHint: 'The plugin could not check every DSH workspace, so it did not create a new backup folder. Fix the workspace list or permissions, then scan again.',
+      blockedCandidates: 'Backup folders found:',
+      blockedIssues: 'Workspaces that could not be checked:',
+      rescan: 'Scan again',
+      rescanning: 'Scanning…',
       logFile: 'Log file',
       credentialNote: 'Sign-in records are not backed up by default. When enabled, a restore point holds .credentials.yaml in plain text, so never share or commit the backup folder. Sessions and attachments are private too.',
       filesLabel: '{n} file(s) · {size}',
@@ -119,6 +126,13 @@ window.__ModuleLoader__.load({
       openLogs: '打开日志文件夹',
       diagnosticsCopied: '诊断信息已复制，分享前请检查内容。',
       clipboardUnavailable: '无法自动复制，请改用“打开日志文件夹”。',
+      backupBlockedTitle: '备份目录需要处理',
+      backupMultipleHint: '检测到多个 dsh-backups 文件夹。为避免备份分叉，插件已停止自动选择。请手动检查，只保留一个文件夹，把其余目录移出 DSH 工作区，然后点“重新检索”。不要合并或删除数据。',
+      backupIncompleteHint: '无法完整检查所有 DSH 工作区，因此没有创建新的备份目录。请检查工作区列表或权限后重新检索。',
+      blockedCandidates: '检测到的备份目录：',
+      blockedIssues: '无法检查的工作区：',
+      rescan: '重新检索',
+      rescanning: '正在检索…',
       logFile: '日志文件',
       credentialNote: '默认不备份登录凭据；勾选后还原点会包含明文的 .credentials.yaml，请勿分享或提交备份文件夹。会话与附件同样是私有数据。',
       filesLabel: '{n} 个文件 · {size}',
@@ -208,6 +222,10 @@ window.__ModuleLoader__.load({
 .dsb-diag { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--dsw-alias-border-l2);
   padding-top: 12px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .dsb-diag strong { color: var(--dsw-alias-label-primary); font-size: 12px; }
+.dsb-blocked { display: flex; flex-direction: column; gap: 8px; }
+.dsb-blocked p { margin: 0; }
+.dsb-blocked ul { margin: 0; padding-left: 18px; }
+.dsb-blocked code { overflow-wrap: anywhere; }
 .dsb-foot { color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
 `
 
@@ -328,7 +346,18 @@ window.__ModuleLoader__.load({
 
       const ready = state.status === 'ready' ? state.data : undefined
       const points = ready?.points ?? []
+      const blocked = ready !== undefined && (ready.backupState ?? 'ready') !== 'ready'
       const busyAny = busy !== ''
+
+      const rescan = useCallback(async () => {
+        setBusy('scan')
+        setNotice(null)
+        try {
+          await load()
+        } finally {
+          setBusy('')
+        }
+      }, [load])
 
       const copyPath = () => {
         const text = ready?.backupRoot ?? ''
@@ -373,7 +402,7 @@ window.__ModuleLoader__.load({
             h('input', {
               type: 'checkbox',
               checked: includeCredentials,
-              disabled: busyAny,
+              disabled: busyAny || blocked,
               onChange: (event) => { setIncludeCredentials(event.target.checked === true) },
             }),
             h('span', null, t('includeCredentials')),
@@ -381,7 +410,7 @@ window.__ModuleLoader__.load({
           h('button', {
             type: 'button',
             className: 'dsb-btn dsb-primary',
-            disabled: busyAny,
+            disabled: busyAny || blocked,
             'aria-busy': busy === 'backup' ? 'true' : undefined,
             onClick: () => { run('backup', { includeCredentials }, (payload) => ({ kind: 'ok', text: t('backupDone', { point: payload.point?.createdAtLocal ?? payload.point?.id ?? '' }) })) },
           }, busy === 'backup' ? t('backingUp') : t('backupNow')),
@@ -398,7 +427,7 @@ window.__ModuleLoader__.load({
           ' ',
           h('button', { type: 'button', className: 'dsb-linkbtn', onClick: () => { load() } }, t('retry')),
         )
-      } else if (ready !== undefined) {
+      } else if (ready !== undefined && !blocked) {
         meta = h('div', { className: 'dsb-meta' },
           h('div', { className: 'dsb-path-row' },
             h('span', null, `${t('location')}:`),
@@ -425,6 +454,32 @@ window.__ModuleLoader__.load({
           className: `dsb-notice ${notice.kind === 'ok' ? 'dsb-notice-ok' : notice.kind === 'error' ? 'dsb-notice-error' : ''}`,
           role: notice.kind === 'error' ? 'alert' : 'status',
         }, notice.text)
+      }
+
+      let blockedNode = null
+      if (blocked) {
+        const candidates = Array.isArray(ready.backupCandidates) ? ready.backupCandidates : []
+        const issues = Array.isArray(ready.backupIssues) ? ready.backupIssues : []
+        blockedNode = h('div', { className: 'dsb-notice dsb-notice-error dsb-blocked', role: 'alert' },
+          h('strong', null, t('backupBlockedTitle')),
+          h('p', null, ready.backupState === 'multiple' ? t('backupMultipleHint') : t('backupIncompleteHint')),
+          candidates.length === 0 ? null : h('div', null,
+            h('span', null, t('blockedCandidates')),
+            h('ul', null, candidates.map((item) => h('li', { key: item.backupRoot || item.workspace },
+              h('code', null, item.backupRoot || item.workspace)))),
+          ),
+          issues.length === 0 ? null : h('div', null,
+            h('span', null, t('blockedIssues')),
+            h('ul', null, issues.map((item) => h('li', { key: item.workspace },
+              h('code', null, item.workspace)))),
+          ),
+          h('button', {
+            type: 'button',
+            className: 'dsb-btn',
+            disabled: busyAny,
+            onClick: () => { rescan() },
+          }, busy === 'scan' ? t('rescanning') : t('rescan')),
+        )
       }
 
       let list
@@ -513,7 +568,7 @@ window.__ModuleLoader__.load({
       }
 
       let offline
-      if (ready === undefined) {
+      if (ready === undefined || blocked) {
         offline = null
       } else if (ready.restoreProgram?.ready === true) {
         offline = h('div', { className: 'dsb-offline' },
@@ -535,7 +590,7 @@ window.__ModuleLoader__.load({
       }
 
       let diagnosticsBlock = null
-      if (ready !== undefined && ready.log?.path) {
+      if (ready !== undefined && !blocked && ready.log?.path) {
         diagnosticsBlock = h('div', { className: 'dsb-diag' },
           h('strong', null, t('diagnosticsTitle')),
           h('span', null, t('diagnosticsHint')),
@@ -567,7 +622,8 @@ window.__ModuleLoader__.load({
         header,
         meta,
         noticeNode,
-        ready === undefined ? null : h('div', null,
+        blockedNode,
+        ready === undefined || blocked ? null : h('div', null,
           h('div', { className: 'dsb-section-head' },
             h('h5', { className: 'dsb-section-title' }, t('pointsHeading')),
             h('span', { className: 'dsb-count' },
@@ -576,8 +632,8 @@ window.__ModuleLoader__.load({
           ),
           list,
         ),
-        offline,
-        diagnosticsBlock,
+        blocked ? null : offline,
+        blocked ? null : diagnosticsBlock,
       )
     }
 

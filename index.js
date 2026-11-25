@@ -185,8 +185,13 @@ async function lastRestoreSummary(env) {
 export async function buildDiagnostics(env) {
   const status = await listStatus(env)
   const log = status.log ?? { path: '', size: 0, maxBytes: 0 }
+  const program = status.restoreProgram ?? { ready: false }
   const last = await lastRestoreSummary(env)
-  const lines = await tailLog(env, 12)
+  const lines = log.path === '' ? [] : await tailLog(env, 12)
+  const candidates = (status.backupCandidates ?? []).map((item) =>
+    `  - ${item.backupRoot || item.workspace}${item.error === '' ? '' : ` (${item.error})`}`)
+  const issues = (status.backupIssues ?? []).map((item) =>
+    `  - ${item.workspace}${item.error === '' ? '' : ` (${item.error})`}`)
   const report = [
     'DSH 备份与恢复 · 诊断信息',
     `生成时间: ${new Date().toISOString()}`,
@@ -195,10 +200,14 @@ export async function buildDiagnostics(env) {
     `Profile: ${env.profile}`,
     `工作区: ${env.workspace}`,
     `备份位置来源: ${env.workspaceSource ?? 'unknown'}`,
+    `备份状态: ${status.backupState ?? 'ready'}`,
+    ...(status.backupError ? [`原因: ${status.backupError}`] : []),
     `备份目录: ${env.backupRoot}`,
+    ...(candidates.length === 0 ? [] : ['备份目录候选:', ...candidates]),
+    ...(issues.length === 0 ? [] : ['无法检查的工作区:', ...issues]),
     `日志文件: ${log.path} (${log.size} bytes, rotate at ${log.maxBytes})`,
     `挂载: route=${diagnostics.route}${diagnostics.routeError === '' ? '' : ` (${diagnostics.routeError})`} tool=${diagnostics.tool}${diagnostics.toolError === '' ? '' : ` (${diagnostics.toolError})`}`,
-    `恢复程序: ready=${status.restoreProgram.ready}`,
+    `恢复程序: ready=${program.ready}`,
     `还原点: ${status.pointCount} 个；最近 ${status.lastBackupAt ?? '无'}`,
     last === null
       ? '上次恢复: 无记录'
@@ -212,6 +221,9 @@ export async function buildDiagnostics(env) {
 
 /** Run one named operation; every failure becomes `{ ok: false, error }`. */
 async function runOperation(ctx, env, operation, point, options = {}) {
+  if (operation !== 'status' && env.backupState !== undefined && env.backupState !== 'ready') {
+    throw new Error(env.backupError || 'backup location is not ready')
+  }
   switch (operation) {
     case 'status': {
       const status = await listStatus(env)
@@ -324,6 +336,14 @@ export function createTool(ctx) {
         const env = resolveEnvironment(ctx)
         if (action === 'status') {
           const status = await listStatus(env)
+          if (status.backupState !== 'ready') {
+            return {
+              ok: false,
+              message: status.backupError || 'backup location is not ready; scan again after fixing the workspace folders',
+              backupRoot: '',
+              points: [],
+            }
+          }
           return {
             ok: true,
             message: status.pointCount === 0
@@ -332,6 +352,9 @@ export function createTool(ctx) {
             backupRoot: status.backupRoot,
             points: pointsOf(status),
           }
+        }
+        if (env.backupState !== undefined && env.backupState !== 'ready') {
+          throw new Error(env.backupError || 'backup location is not ready')
         }
         if (action === 'backup') {
           const manifest = await createPoint(env, { includeCredentials: args?.includeCredentials === true })
@@ -427,7 +450,7 @@ export function apply(ctx) {
                   return
                 }
                 if (operation === 'diagnostics') {
-                  send(res, 200, { ok: true, report: await buildDiagnostics(env), logPath: logPath(env) })
+                  send(res, 200, { ok: true, report: await buildDiagnostics(env), logPath: env.backupRoot === '' ? '' : logPath(env) })
                   return
                 }
                 send(res, 405, { ok: false, error: 'method not allowed' })

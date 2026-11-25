@@ -33,7 +33,15 @@ async function seed() {
   await mkdir(workspace, { recursive: true })
 }
 
-const ctx = { get: (name) => (name === 'workingDirectory' ? { defaultDirectory: workspace } : undefined) }
+const ctx = {
+  get: (name) => {
+    if (name === 'workingDirectory') return { defaultDirectory: workspace }
+    if (name === 'workspaceRegistry') {
+      return { list: () => [{ path: workspace, updatedAt: '2026-01-01T00:00:00.000Z' }] }
+    }
+    return undefined
+  },
+}
 
 const check = (label, ok) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}`)
