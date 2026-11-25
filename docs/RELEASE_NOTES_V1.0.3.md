@@ -1,5 +1,7 @@
 # DSH 备份与恢复 v1.0.3
 
+> 历史版本说明：V1.0.3 使用 `location.json` 固定备份位置；当前开发版已改为跨工作区检索，见 `CHANGELOG.md` 的 Unreleased 段。
+
 适用 DSH 版本：0.2.2-rc.5（开发/测试所用版本）
 最低兼容版本：>= 0.2.2-rc.5（由插件 engines.dsh 强制校验）
 

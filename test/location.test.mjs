@@ -131,6 +131,13 @@ const blockedStatus = await listStatus(env)
 check('blocked status is surfaced', blockedStatus.backupState === 'blocked' && blockedStatus.backupRoot === '')
 check('blocked state creates no folder', !existsSync(path.join(blocked, 'dsh-backups')))
 
+const registryless = await workspace('registryless')
+const registrylessStore = await store(registryless)
+env = resolveEnvironment(noRegistryContext(registryless))
+check('registry unavailable blocks even when a folder is visible', env.backupState === 'blocked' && env.backupRoot === '', JSON.stringify(env))
+check('registry unavailable reports the visible candidate', (env.backupCandidates ?? []).some((item) => item.backupRoot === registrylessStore))
+check('registry unavailable does not touch the visible folder', !existsSync(path.join(registrylessStore, 'restore.ps1')))
+
 // 9. A registered workspace that cannot be checked blocks creation too.
 const missing = dir('missing-workspace')
 const incomplete = await workspace('incomplete')
@@ -153,11 +160,16 @@ env = resolveEnvironment(context(badBackup, [ws(badBackup)]))
 check('a non-directory dsh-backups blocks creation', env.backupState === 'blocked', env.backupState)
 check('invalid dsh-backups is reported as an issue', (env.backupIssues ?? []).some((item) => item.backupRoot === path.join(badBackup, 'dsh-backups')))
 
-// 11. A unique accessible folder is still usable when another workspace is missing.
+// 11. One visible folder is not enough if another registered workspace is unchecked.
 const unique = await workspace('unique')
 const uniqueStore = await store(unique)
 env = resolveEnvironment(context(unique, [ws(unique), ws(missing)]))
-check('unique folder wins even if another workspace is unavailable', env.backupState === 'ready' && env.backupRoot === uniqueStore, env.backupRoot)
+check('one folder plus an unchecked workspace is blocked', env.backupState === 'blocked' && env.backupRoot === '', JSON.stringify(env))
+check('the blocked candidate is reported but not selected', (env.backupCandidates ?? []).some((item) => item.backupRoot === uniqueStore))
+check('blocked uniqueness does not seed a program', !existsSync(path.join(uniqueStore, 'restore.ps1')))
+const strictStatus = await listStatus(env)
+check('blocked uniqueness is exposed in status', strictStatus.backupState === 'blocked' && strictStatus.backupRoot === '')
+check('status still shows the blocked candidate', (strictStatus.backupCandidates ?? []).some((item) => item.backupRoot === uniqueStore))
 
 // 12. Registry available but empty: current workspace is the fallback creation target.
 const emptyRegistry = await workspace('empty-registry')
