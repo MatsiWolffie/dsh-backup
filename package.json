@@ -1,6 +1,6 @@
 {
   "name": "@matsiwolffie/dsh-backup",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Backup and restore points for the DSH desktop app: profile configuration, sessions, local storage, and attachments are copied into a workspace folder together with an offline restore program.",
   "license": "MIT",
   "author": "MatsiWolffie",
