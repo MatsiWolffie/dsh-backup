@@ -25,6 +25,23 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Get-FullDirectory([string]$PathValue) {
+  $full = [System.IO.Path]::GetFullPath($PathValue)
+  $root = [System.IO.Path]::GetPathRoot($full)
+  while ($full.Length -gt $root.Length -and ($full.EndsWith('\') -or $full.EndsWith('/'))) {
+    $full = $full.Substring(0, $full.Length - 1)
+  }
+  return $full
+}
+
+function Test-PathWithin([string]$Parent, [string]$Child) {
+  $parentFull = Get-FullDirectory $Parent
+  $childFull = [System.IO.Path]::GetFullPath($Child)
+  if ($childFull.Equals($parentFull, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+  $prefix = $parentFull + [System.IO.Path]::DirectorySeparatorChar
+  return $childFull.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PointsDir = Join-Path $ScriptDir 'points'
 if ($env:DSH_HOME -and $env:DSH_HOME.Trim() -ne '') {
@@ -32,6 +49,7 @@ if ($env:DSH_HOME -and $env:DSH_HOME.Trim() -ne '') {
 } else {
   $DshHome = Join-Path $env:USERPROFILE '.dsh'
 }
+$DshHome = Get-FullDirectory $DshHome
 
 $ScriptVersion = '1.0.4'
 $LogDir = Join-Path $ScriptDir 'logs'
@@ -109,13 +127,111 @@ function Show-Points($points, $manifests) {
   Write-Host ("备份目录: {0}" -f $ScriptDir)
 }
 
+function Assert-PartId([string]$Id) {
+  if ([string]::IsNullOrWhiteSpace($Id)) { throw '还原点包含非法的部分 ID（空值）' }
+  if ($Id -eq '.' -or $Id -eq '..') { throw "还原点包含非法的部分 ID：$Id" }
+  if ([System.IO.Path]::IsPathRooted($Id)) { throw "还原点包含非法的部分 ID：$Id" }
+  if ($Id.Contains(':') -or $Id.Contains('/') -or $Id.Contains('\')) { throw "还原点包含非法的部分 ID：$Id" }
+  if ($Id -notmatch '^[A-Za-z0-9._-]+$') { throw "还原点包含非法的部分 ID：$Id" }
+  return $Id
+}
+
+function Resolve-PartSource([string]$Folder, [string]$Id) {
+  $safe = Assert-PartId $Id
+  $root = Get-FullDirectory $Folder
+  $source = [System.IO.Path]::GetFullPath((Join-Path $root $safe))
+  if (-not (Test-PathWithin $root $source)) { throw "部分 ID 的路径越界：$Id" }
+  return $source
+}
+
+function Resolve-PartTarget([string]$Target) {
+  if ([string]::IsNullOrWhiteSpace($Target)) { throw '还原点包含非法的恢复目标（空值）' }
+  if ([System.IO.Path]::IsPathRooted($Target)) { throw "非法的恢复目标：$Target" }
+  if ($Target -match '^[A-Za-z]:' -or $Target.Contains(':')) { throw "非法的恢复目标：$Target" }
+  $segments = $Target -split '[\\/]'
+  foreach ($segment in $segments) {
+    if ($segment -eq '' -or $segment -eq '.' -or $segment -eq '..') { throw "非法的恢复目标：$Target" }
+  }
+  $relative = $Target.Replace('/', '\')
+  $full = [System.IO.Path]::GetFullPath((Join-Path $DshHome $relative))
+  if (-not (Test-PathWithin $DshHome $full)) { throw "恢复目标越界：$Target" }
+  return $full
+}
+
+function Get-ValidatedParts([string]$Folder, $Manifest) {
+  $validated = @()
+  foreach ($part in @($Manifest.parts)) {
+    if ($null -eq $part) { throw '还原点包含无效的部分条目' }
+    if ($part.missing -eq $true) { continue }
+    $id = Assert-PartId ([string]$part.id)
+    $source = Resolve-PartSource $Folder $id
+    $target = Resolve-PartTarget ([string]$part.target)
+    $validated += [pscustomobject]@{
+      Part = $part
+      Id = $id
+      Source = $source
+      Target = $target
+      Exists = (Test-Path -LiteralPath $source)
+    }
+  }
+  return @($validated)
+}
+
+function Get-SafeZipRelativePath([string]$EntryName) {
+  if ([string]::IsNullOrWhiteSpace($EntryName)) { throw 'ZIP 包含空条目路径' }
+  $normalized = $EntryName.Replace('\', '/')
+  if ($normalized.StartsWith('/')) { throw "ZIP 条目使用了绝对路径：$EntryName" }
+  if ($normalized -match '^[A-Za-z]:' -or $normalized.Contains(':')) { throw "ZIP 条目使用了盘符/绝对路径：$EntryName" }
+  $trimmed = $normalized.TrimEnd('/')
+  if ($trimmed -eq '') { throw "ZIP 条目路径为空：$EntryName" }
+  $segments = $trimmed.Split('/')
+  foreach ($segment in $segments) {
+    if ($segment -eq '' -or $segment -eq '.' -or $segment -eq '..') { throw "ZIP 条目包含路径穿越：$EntryName" }
+  }
+  return $trimmed
+}
+
 function Expand-PointZip([string]$zipPath) {
   $temp = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-restore-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
   New-Item -ItemType Directory -Force -Path $temp | Out-Null
-  Expand-Archive -LiteralPath $zipPath -DestinationPath $temp -Force
-  $found = Get-ChildItem -LiteralPath $temp -Recurse -Filter 'manifest.json' -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $found) { throw "这个 zip 里没有还原点（缺少 manifest.json）：$zipPath" }
-  return $found.Directory.FullName
+  try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+    try {
+      $validatedEntries = @()
+      foreach ($entry in $archive.Entries) {
+        $relative = Get-SafeZipRelativePath $entry.FullName
+        $destination = [System.IO.Path]::GetFullPath((Join-Path $temp ($relative.Replace('/', '\'))))
+        if (-not (Test-PathWithin $temp $destination)) { throw "ZIP 条目越界：$($entry.FullName)" }
+        $isDirectory = $entry.FullName.EndsWith('/') -or $entry.FullName.EndsWith('\') -or $entry.Name -eq ''
+        $validatedEntries += [pscustomobject]@{
+          Entry = $entry
+          Destination = $destination
+          IsDirectory = $isDirectory
+        }
+      }
+      foreach ($item in $validatedEntries) {
+        if ($item.IsDirectory) {
+          New-Item -ItemType Directory -Force -Path $item.Destination | Out-Null
+        } else {
+          $parent = Split-Path -Parent $item.Destination
+          if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+          [System.IO.Compression.ZipFileExtensions]::ExtractToFile($item.Entry, $item.Destination, $true)
+        }
+      }
+    } finally {
+      $archive.Dispose()
+    }
+    $found = Get-ChildItem -LiteralPath $temp -Recurse -Filter 'manifest.json' -ErrorAction SilentlyContinue |
+      Where-Object { -not $_.PSIsContainer } | Select-Object -First 1
+    if (-not $found) { throw "这个 zip 里没有还原点（缺少 manifest.json）：$zipPath" }
+    $foundFull = [System.IO.Path]::GetFullPath($found.FullName)
+    if (-not (Test-PathWithin $temp $foundFull)) { throw "ZIP 中的 manifest.json 越界：$zipPath" }
+    return $found.Directory.FullName
+  } catch {
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+    throw
+  }
 }
 
 function Resolve-PointFolder([string]$value) {
@@ -161,6 +277,9 @@ function Merge-Tree([string]$Source, [string]$Target, [string[]]$ExcludeTop = @(
 
 function Invoke-Restore([string]$folder) {
   $manifest = Read-Manifest $folder
+  # Validate every path before prompting or writing anything, so an invalid
+  # manifest cannot leave a partially restored state behind.
+  $validated = Get-ValidatedParts $folder $manifest
   Write-Head '恢复预览'
   Write-Host ("还原点: {0}   {1}" -f $manifest.createdAtLocal, (Get-NoteText $manifest))
   Write-Host ("来源:   {0}" -f $folder)
@@ -187,24 +306,25 @@ function Invoke-Restore([string]$folder) {
   $quarantine = Join-Path $DshHome (".dsh-backup\replaced-" + $stamp)
   New-Item -ItemType Directory -Force -Path $quarantine | Out-Null
   $results = @()
-  foreach ($part in @($manifest.parts)) {
-    if ($part.missing -eq $true) { continue }
-    $source = Join-Path $folder $part.id
-    if (-not (Test-Path -LiteralPath $source)) {
-      $results += [pscustomobject]@{ id = $part.id; label = $part.label; ok = $false; message = '备份中缺少该部分' }
+  foreach ($entry in $validated) {
+    $part = $entry.Part
+    $id = $entry.Id
+    $source = $entry.Source
+    $target = $entry.Target
+    if (-not $entry.Exists) {
+      $results += [pscustomobject]@{ id = $id; label = $part.label; ok = $false; message = '备份中缺少该部分' }
       continue
     }
-    $target = Join-Path $DshHome ($part.target -replace '/', '\')
     $parent = Split-Path -Parent $target
     try {
       if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
       # Keep a copy of what the restore is about to overwrite. The profile copy
       # skips node_modules: it is huge, machine-specific, and never restored.
       if (Test-Path -LiteralPath $target) {
-        $backupCopy = Join-Path $quarantine $part.id
+        $backupCopy = Join-Path $quarantine $id
         if ($part.kind -eq 'file') {
           Copy-Item -LiteralPath $target -Destination $backupCopy -Force
-        } elseif ($part.id -eq 'profile') {
+        } elseif ($id -eq 'profile') {
           Merge-Tree -Source $target -Target $backupCopy -ExcludeTop @('node_modules')
         } else {
           Merge-Tree -Source $target -Target $backupCopy
@@ -217,13 +337,13 @@ function Invoke-Restore([string]$folder) {
       } else {
         Merge-Tree -Source $source -Target $target
       }
-      $results += [pscustomobject]@{ id = $part.id; label = $part.label; ok = $true; message = '' }
+      $results += [pscustomobject]@{ id = $id; label = $part.label; ok = $true; message = '' }
       Write-Ok ("  已恢复 {0}" -f $part.label)
-      Write-RestoreLog 'INFO' ("part ok id={0}" -f $part.id)
+      Write-RestoreLog 'INFO' ("part ok id={0}" -f $id)
     } catch {
-      $results += [pscustomobject]@{ id = $part.id; label = $part.label; ok = $false; message = $_.Exception.Message }
+      $results += [pscustomobject]@{ id = $id; label = $part.label; ok = $false; message = $_.Exception.Message }
       Write-Bad ("  恢复失败 {0}：{1}" -f $part.label, $_.Exception.Message)
-      Write-RestoreLog 'ERROR' ("part failed id={0} error={1}" -f $part.id, $_.Exception.Message)
+      Write-RestoreLog 'ERROR' ("part failed id={0} error={1}" -f $id, $_.Exception.Message)
     }
   }
 
