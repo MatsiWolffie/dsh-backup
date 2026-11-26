@@ -2,9 +2,9 @@
 
 面向 **DeepSeek Harness 桌面端（DSH Desktop）** 的本地备份/还原点插件：在工作区内创建 `dsh-backups` 文件夹，把 DSH 配置、会话、本机存储与附件保存为还原点，并附带一个可在 DSH 无法启动时使用的离线恢复程序。
 
-当前版本：**1.0.4**
+当前版本：**1.0.5**
 
-> **支持范围（V1.0.4）**
+> **支持范围（V1.0.5）**
 > - 当前版本**仅在 Windows 11 上提供支持与验证**。
 > - Windows 10、macOS、Linux 及其他环境**未支持、未验证**，请不要将其视为可用环境。
 > - 要求 DSH 桌面端 **`>= 0.2.2-rc.5`**（开发/测试版本为 `0.2.2-rc.5`，与 `package.json` 的 `engines.dsh` 一致）。
@@ -103,6 +103,14 @@ DSH 备份与恢复把 DSH Desktop 的以下内容保存到工作区内的 `dsh-
 4. 1.0.4 **不再读取** 旧的 `location.json`，该文件可以保留，但不再作为备份位置依据；
 5. 如果存在多个 `dsh-backups`，先按第 6 节手动只保留一个，再重新检索。
 
+### 从 1.0.4 升级到 1.0.5
+
+1. 下载 V1.0.5 发布页提供的 Source code (zip)，解压后选择直接包含 `package.json` 的目录，按原有方式更新或重新添加插件；
+2. 打开一次插件页，让 `dsh-backups/restore.ps1` 刷新到 1.0.5；
+3. 原有还原点继续保留，无需迁移旧备份；
+4. 不需要修改旧 `manifest.json`；
+5. 使用离线恢复前仍须完全退出 DSH。
+
 ---
 
 ## 5. 备份与恢复的基本说明
@@ -146,6 +154,8 @@ DSH 备份与恢复把 DSH Desktop 的以下内容保存到工作区内的 `dsh-
 5. 完成后重新打开 DSH。
 
 离线恢复只支持 Windows 11；脚本会检测 DSH 进程，仍在运行时拒绝执行。确认已退出仍被误判时，可在命令行加 `-Force`。
+
+离线恢复在写入前会执行 **Reparse Point（符号链接 / 目录联接）安全检查**，覆盖 `DSH_HOME`、备份源、恢复目标、回滚路径、递归复制路径，以及 ZIP 解压过程中实际创建的临时目录和目标路径；检测到不允许的重解析点，或无法确认路径属性时，恢复会**中止**。该检查已在 Windows 11 + Windows PowerShell 5.1 下通过真实 Junction 测试；本轮安全更新累计 **214 项通过、1 项跳过**（Symlink）。Symlink 与权限拒绝场景尚未动态验证；检查通过后路径仍可能被本地替换（TOCTOU），因此**不能声称已绝对消除路径逃逸**。仍保持 V1.0.4 的 manifest 兼容性与 Windows 11 支持范围。
 
 ---
 
@@ -265,10 +275,11 @@ dsh-backups/
 
 ## 9. 版本说明与 Release
 
-- 当前版本：**1.0.4**
+- 当前版本：**1.0.5**
 - 项目仓库：<https://github.com/MatsiWolffie/dsh-backup>
 - 下载最新版本：<https://github.com/MatsiWolffie/dsh-backup/releases>
 - V1.0.4 发布说明：[`docs/RELEASE_NOTES_V1.0.4.md`](docs/RELEASE_NOTES_V1.0.4.md)
+- V1.0.5 发布说明：[`docs/RELEASE_NOTES_V1.0.5.md`](docs/RELEASE_NOTES_V1.0.5.md)
 - 历史变更：[`CHANGELOG.md`](CHANGELOG.md)
 - 安全报告：[`SECURITY.md`](SECURITY.md)
 - 贡献说明：[`CONTRIBUTING.md`](CONTRIBUTING.md)
@@ -280,6 +291,13 @@ V1.0.4 主要变化：
 - 多个目录或无法检查的工作区时阻断，并显示全部候选；
 - 用户手动清理后可以重新检索；
 - 当前版本仅支持 Windows 11，要求 DSH `>= 0.2.2-rc.5`。
+
+V1.0.5 主要变化：
+
+- 离线恢复新增 Reparse Point 安全检查，覆盖 `DSH_HOME`、备份源、恢复目标、回滚路径、递归复制路径，以及 ZIP 解压过程中实际创建的临时目录和目标路径；
+- 检测到不允许的重解析点或无法确认路径属性时中止恢复；
+- Windows 11 下真实 Junction 测试通过；累计 214 PASS、1 SKIP（Symlink 未动态验证）；
+- 保留 V1.0.4 的 manifest 兼容性与 Windows 11 支持范围。
 
 > 正式发布后，请以 Releases 页面显示的版本和说明为准。
 
@@ -300,9 +318,9 @@ V1.0.4 主要变化：
 
 **DSH Backup & Restore Points** is a local backup and restore-point plugin for **DeepSeek Harness Desktop (DSH Desktop)**, supported in this release on **Windows 11 only**. It stores DSH profile configuration, session logs, local storage, and attachments in a `dsh-backups` folder inside a DSH workspace, and ships a Windows 11 offline restore program for situations where DSH cannot start.
 
-Current version: **1.0.4**
+Current version: **1.0.5**
 
-> **Support scope (V1.0.4)**
+> **Support scope (V1.0.5)**
 > - Supported and verified on **Windows 11 only**.
 > - Windows 10, macOS, Linux, and other environments are **not supported or verified** in this release.
 > - Requires DSH Desktop **`>= 0.2.2-rc.5`** (developed/tested with `0.2.2-rc.5`, matching `package.json` `engines.dsh`).
@@ -378,6 +396,14 @@ Upgrade from 1.0.3:
 4. Version 1.0.4 no longer reads the old `location.json`; the file may remain, but it is no longer authoritative.
 5. If multiple `dsh-backups` folders exist, keep only one manually (see below), then rescan.
 
+Upgrade from 1.0.4:
+
+1. Download the Source code (zip) from the V1.0.5 release, extract it, and select the directory that directly contains `package.json` to update or re-add the plugin.
+2. Open the plugin page once so `dsh-backups/restore.ps1` is refreshed to 1.0.5.
+3. Existing restore points are kept; no backup migration is needed.
+4. No change to existing `manifest.json` files is required.
+5. Fully quit DSH before using the offline restore program.
+
 ### Backup and restore
 
 **In-app backup**
@@ -408,6 +434,8 @@ Backup contents: profile configuration (excluding `node_modules` and logs), sess
 5. Reopen DSH.
 
 Offline restore is supported on Windows 11 only. The script refuses to run while DSH processes are detected; use `-Force` only after confirming DSH has exited.
+
+Before writing, offline restore performs a **Reparse Point (symlink / junction) safety check** across `DSH_HOME`, backup sources, restore targets, rollback paths, recursive copy paths, and the temporary directories and target paths actually created during ZIP extraction. It aborts when a disallowed reparse point is detected or when path attributes cannot be confirmed. This was verified with real junction tests on Windows 11 + Windows PowerShell 5.1; this security update totals **214 passing and 1 skipped** (symlink). Symlink and permission-denied scenarios are not yet dynamically verified, and a checked path could still be replaced locally after the check (TOCTOU), so absolute elimination of path escape is **not claimed**. V1.0.4 manifest compatibility and the Windows 11 support scope are preserved.
 
 ### Backup folder location and workspace migration
 
@@ -482,13 +510,16 @@ Logs and receipt:
 
 ### Version and releases
 
-- Current version: **1.0.4**
+- Current version: **1.0.5**
 - Repository: <https://github.com/MatsiWolffie/dsh-backup>
 - Releases: <https://github.com/MatsiWolffie/dsh-backup/releases>
 - V1.0.4 release notes: [`docs/RELEASE_NOTES_V1.0.4.md`](docs/RELEASE_NOTES_V1.0.4.md)
+- V1.0.5 release notes: [`docs/RELEASE_NOTES_V1.0.5.md`](docs/RELEASE_NOTES_V1.0.5.md)
 - Changelog: [`CHANGELOG.md`](CHANGELOG.md)
 
 V1.0.4 changes: cross-workspace discovery, removal of the fixed `location.json` path, blocking on multiple or uncheckable workspaces with a candidate list and rescan, and Windows 11-only support requiring DSH `>= 0.2.2-rc.5`.
+
+V1.0.5 changes: offline restore adds a Reparse Point safety check across `DSH_HOME`, backup sources, restore targets, rollback paths, recursive copy paths, and the temporary directories and target paths created during ZIP extraction; it aborts when a disallowed reparse point is detected or path attributes cannot be confirmed. Verified with real junction tests on Windows 11 (214 passing, 1 skipped for symlink); V1.0.4 manifest compatibility and the Windows 11 support scope are preserved.
 
 > After publication, the Releases page is authoritative for downloadable versions and notes.
 

@@ -42,6 +42,41 @@ function Test-PathWithin([string]$Parent, [string]$Child) {
   return $childFull.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-PathItem([string]$Path) {
+  try {
+    return (Get-Item -LiteralPath $Path -Force -ErrorAction Stop)
+  } catch [System.Management.Automation.ItemNotFoundException] {
+    return $null
+  }
+}
+
+function Test-PathPresent([string]$Path) {
+  return ($null -ne (Get-PathItem $Path))
+}
+
+function Assert-NotReparse([string]$Path) {
+  $item = Get-PathItem $Path
+  if ($null -ne $item -and (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+    throw "检测到重解析点/链接，已中止：$Path"
+  }
+}
+
+function Assert-SafePathChain([string]$Boundary, [string]$FullPath) {
+  $boundaryFull = Get-FullDirectory $Boundary
+  $pathFull = [System.IO.Path]::GetFullPath($FullPath)
+  if (-not (Test-PathWithin $boundaryFull $pathFull)) { throw "路径越界：$FullPath" }
+  Assert-NotReparse $boundaryFull
+  if ($pathFull -eq $boundaryFull) { return }
+  $rel = $pathFull.Substring($boundaryFull.Length).TrimStart('\', '/')
+  if ($rel -eq '') { return }
+  $current = $boundaryFull
+  foreach ($segment in ($rel -split '[\\/]')) {
+    if ($segment -eq '') { continue }
+    $current = Join-Path $current $segment
+    if (-not (Test-PathPresent $current)) { return }
+    Assert-NotReparse $current
+  }
+}
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PointsDir = Join-Path $ScriptDir 'points'
 if ($env:DSH_HOME -and $env:DSH_HOME.Trim() -ne '') {
@@ -50,8 +85,9 @@ if ($env:DSH_HOME -and $env:DSH_HOME.Trim() -ne '') {
   $DshHome = Join-Path $env:USERPROFILE '.dsh'
 }
 $DshHome = Get-FullDirectory $DshHome
+Assert-NotReparse $DshHome
 
-$ScriptVersion = '1.0.4'
+$ScriptVersion = '1.0.5'
 $LogDir = Join-Path $ScriptDir 'logs'
 $LogFile = Join-Path $LogDir 'restore-offline.log'
 
@@ -166,12 +202,14 @@ function Get-ValidatedParts([string]$Folder, $Manifest) {
     $id = Assert-PartId ([string]$part.id)
     $source = Resolve-PartSource $Folder $id
     $target = Resolve-PartTarget ([string]$part.target)
+    Assert-SafePathChain $Folder $source
+    Assert-SafePathChain $DshHome $target
     $validated += [pscustomobject]@{
       Part = $part
       Id = $id
       Source = $source
       Target = $target
-      Exists = (Test-Path -LiteralPath $source)
+      Exists = (Test-PathPresent $source)
     }
   }
   return @($validated)
@@ -194,6 +232,7 @@ function Get-SafeZipRelativePath([string]$EntryName) {
 function Expand-PointZip([string]$zipPath) {
   $temp = Join-Path ([System.IO.Path]::GetTempPath()) ("dsh-restore-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
   New-Item -ItemType Directory -Force -Path $temp | Out-Null
+  Assert-NotReparse $temp
   try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
     $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
@@ -203,6 +242,7 @@ function Expand-PointZip([string]$zipPath) {
         $relative = Get-SafeZipRelativePath $entry.FullName
         $destination = [System.IO.Path]::GetFullPath((Join-Path $temp ($relative.Replace('/', '\'))))
         if (-not (Test-PathWithin $temp $destination)) { throw "ZIP 条目越界：$($entry.FullName)" }
+        Assert-SafePathChain $temp $destination
         $isDirectory = $entry.FullName.EndsWith('/') -or $entry.FullName.EndsWith('\') -or $entry.Name -eq ''
         $validatedEntries += [pscustomobject]@{
           Entry = $entry
@@ -227,6 +267,7 @@ function Expand-PointZip([string]$zipPath) {
     if (-not $found) { throw "这个 zip 里没有还原点（缺少 manifest.json）：$zipPath" }
     $foundFull = [System.IO.Path]::GetFullPath($found.FullName)
     if (-not (Test-PathWithin $temp $foundFull)) { throw "ZIP 中的 manifest.json 越界：$zipPath" }
+    Assert-SafePathChain $temp $foundFull
     return $found.Directory.FullName
   } catch {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
@@ -263,9 +304,13 @@ function Get-DshProcesses {
 # Unlike replacing a directory, this keeps files the source does not contain —
 # most importantly the profile's node_modules, which no backup includes.
 function Merge-Tree([string]$Source, [string]$Target, [string[]]$ExcludeTop = @()) {
-  if (-not (Test-Path -LiteralPath $Target)) { New-Item -ItemType Directory -Force -Path $Target | Out-Null }
+  $parent = Split-Path -Parent $Target
+  if ($parent) { Assert-SafePathChain $parent $Target }
+  if (-not (Test-PathPresent $Target)) { New-Item -ItemType Directory -Force -Path $Target | Out-Null }
+  Assert-NotReparse $Target
   foreach ($item in Get-ChildItem -LiteralPath $Source -Force) {
     if ($ExcludeTop -contains $item.Name) { continue }
+    Assert-NotReparse $item.FullName
     $destination = Join-Path $Target $item.Name
     if ($item.PSIsContainer) {
       Merge-Tree -Source $item.FullName -Target $destination
@@ -304,7 +349,9 @@ function Invoke-Restore([string]$folder) {
 
   $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
   $quarantine = Join-Path $DshHome (".dsh-backup\replaced-" + $stamp)
+  Assert-SafePathChain $DshHome $quarantine
   New-Item -ItemType Directory -Force -Path $quarantine | Out-Null
+  Assert-NotReparse $quarantine
   $results = @()
   foreach ($entry in $validated) {
     $part = $entry.Part
@@ -315,12 +362,14 @@ function Invoke-Restore([string]$folder) {
       $results += [pscustomobject]@{ id = $id; label = $part.label; ok = $false; message = '备份中缺少该部分' }
       continue
     }
+    Assert-SafePathChain $folder $source
+    Assert-SafePathChain $DshHome $target
     $parent = Split-Path -Parent $target
     try {
-      if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+      if (-not (Test-PathPresent $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null; Assert-NotReparse $parent }
       # Keep a copy of what the restore is about to overwrite. The profile copy
       # skips node_modules: it is huge, machine-specific, and never restored.
-      if (Test-Path -LiteralPath $target) {
+      if (Test-PathPresent $target) {
         $backupCopy = Join-Path $quarantine $id
         if ($part.kind -eq 'file') {
           Copy-Item -LiteralPath $target -Destination $backupCopy -Force
