@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.5 — 2026-11-26
+
+### 安全改进
+
+- 离线恢复新增 Windows Reparse Point（符号链接 / 目录联接）检查。
+- 检查覆盖 `DSH_HOME`、备份源、恢复目标、回滚路径、递归复制路径，
+  以及 ZIP 解压实际创建的临时目录与目标路径。
+- 检测到不允许的重解析点，或无法安全确认路径属性时，恢复中止。
+- 保留 A2 的还原点 ID 校验、词法边界检查与 ZIP 条目校验；不改变备份格式与恢复复制逻辑。
+- 离线程序的 `$ScriptVersion` 同步为 1.0.5。
+
+### 测试与验证
+
+- A2-R1 专项测试：22 PASS / 0 FAIL / 1 SKIP；A2 专项测试：56 PASS；Node 原有测试：136 PASS。
+- 合计：214 PASS / 0 FAIL / 1 SKIP；真实 Windows Junction 场景在隔离临时目录中测试，
+  环境为 Windows 11 + Windows PowerShell 5.1。
+- Symlink 与 ACL 权限拒绝场景未动态验证；TOCTOU 本地竞争风险仍在，
+  不宣称已绝对消除路径穿越、路径逃逸或所有文件系统安全风险。
+
+### 兼容性与升级说明
+
+- 保留 V1.0.4 manifest 兼容性；不改变备份格式，旧还原点无需迁移，旧 manifest 无需修改。
+- 支持范围不变：仅 Windows 11；DSH `>= 0.2.2-rc.5`；Node.js `>= 20`；离线恢复使用 Windows PowerShell 5.1。
+- 升级：下载发布页提供的 Source code (zip)，解压后选择直接包含 `package.json` 的目录，
+  按原有方式更新或重新添加插件；打开一次插件页让 `restore.ps1` 刷新到 1.0.5。
+- 使用离线恢复前仍须完全退出 DSH。
+
 ## 1.0.4 — 2026-11-25
 
 ### 变更
