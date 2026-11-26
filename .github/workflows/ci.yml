@@ -19,5 +19,6 @@ jobs:
       - run: node test/log.test.mjs
       - run: node test/diagnostics.test.mjs
       - run: node test/location.test.mjs
+      - run: node test/point-id.test.mjs
       - run: node test/engine.test.mjs
       - run: node test/tool.test.mjs
